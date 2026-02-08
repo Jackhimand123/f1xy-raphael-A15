@@ -29,33 +29,40 @@ jobs:
           # 1. Base Config
           make ARCH=arm64 raphael_defconfig
           
-          # 2. FIX 1: Scheduler definitions
-          # Removed 'extern' to avoid "static follows non-static" collision
-          cat <<EOF > fix_sched.h
-          #ifndef _FIX_SCHED_H
-          #define _FIX_SCHED_H
+          # 2. FIX: Global definitions (Scheduler & MHI)
+          cat <<EOF > fix_global.h
+          #ifndef _FIX_GLOBAL_H
+          #define _FIX_GLOBAL_H
           #define SCHED_FULL_THROTTLE 1
           #define FULL_THROTTLE_BOOST 1
+          #define MAX_MSG_SIZE 255
           #endif
           EOF
-          sed -i "1i #include \"$(pwd)/fix_sched.h\"" kernel/sched/sched.h
+          # Inject into core headers
+          sed -i "1i #include \"$(pwd)/fix_global.h\"" kernel/sched/sched.h
+          # Also inject into MHI to fix MAX_MSG_SIZE
+          if [ -f drivers/bus/mhi/controllers/mhi_arch_qcom.c ]; then
+             sed -i "1i #include \"$(pwd)/fix_global.h\"" drivers/bus/mhi/controllers/mhi_arch_qcom.c
+             # Fix the IPC pointer conversion
+             sed -i 's/ipc_log_context_create/(void *)ipc_log_context_create/g' drivers/bus/mhi/controllers/mhi_arch_qcom.c
+          fi
 
-          # 3. FIX 2: HID Tracepoint path inclusion
+          # 3. FIX: HID Tracepoint path
           if [ -f drivers/hid/Makefile ]; then
             sed -i 's|CFLAGS_hid-trace.o := -I$(src)|CFLAGS_hid-trace.o := -I$(src) -I$(srctree)/$(src)|g' drivers/hid/Makefile
           fi
 
-          # 4. FIX 3: LED Class structure mismatch
+          # 4. FIX: LED Class mismatch
           if [ -f drivers/leds/leds.h ]; then
             sed -i '/list_for_each_entry(led_cdev, &trig->led_cdevs, trig_list)/,/}/ s/^/\/\//' drivers/leds/leds.h
           fi
 
-          # 5. FIX 4: UFS Pinctrl pointer conversion
+          # 5. FIX: UFS Pinctrl cast
           if [ -f drivers/scsi/ufs/ufshcd-pltfrm.c ]; then
             sed -i 's/hba->pctrl = devm_pinctrl_get(hba->dev);/hba->pctrl = (struct pinctrl *)devm_pinctrl_get(hba->dev);/g' drivers/scsi/ufs/ufshcd-pltfrm.c
           fi
 
-          # 6. Performance & Compatibility Fixes
+          # 6. Performance & Compatibility
           if [ -f kernel/sched/fair.c ]; then
             sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
           fi
@@ -63,8 +70,6 @@ jobs:
 
       - name: Build Kernel
         run: |
-          # LLVM_IAS=0 handles the ARM64 assembly quirks
-          # DTC_EXT=dtc handles the Device Tree compilation
           make -j$(nproc --all) \
             LLVM=1 \
             LLVM_IAS=0 \
@@ -77,15 +82,11 @@ jobs:
       - name: Prepare Artifacts
         run: |
           mkdir -p out
-          if [ -f arch/arm64/boot/Image.gz-dtb ]; then
-            cp arch/arm64/boot/Image.gz-dtb out/
-          elif [ -f arch/arm64/boot/Image.gz ]; then
-            cp arch/arm64/boot/Image.gz out/
-          fi
+          [ -f arch/arm64/boot/Image.gz-dtb ] && cp arch/arm64/boot/Image.gz-dtb out/
           find arch/arm64/boot/dts/qcom/ -name "*.dtb" -exec cp {} out/ \;
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-A15-V8-Final
+          name: Raphael-Kernel-A15-V9
           path: out/*
