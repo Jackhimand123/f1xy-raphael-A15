@@ -103,7 +103,7 @@ int mhi_arch_link_resume(struct mhi_controller *mhi_cntrl);
 
 #else
 
-static inline int mhi_arch_iommu_init(struct mhi_controller *mhi_cntrl)
+/*static inline int mhi_arch_iommu_init(struct mhi_controller *mhi_cntrl)
 {
 	struct mhi_dev *mhi_dev = mhi_controller_get_devdata(mhi_cntrl);
 
@@ -153,7 +153,7 @@ static inline int mhi_arch_link_lpm_enable(struct mhi_controller *mhi_cntrl)
 {
 	return 0;
 }
-
+*/
 #endif
 
 #endif /* _MHI_QCOM_ */
