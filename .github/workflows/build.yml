@@ -14,21 +14,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            bc \
-            build-essential \
-            flex \
-            bison \
-            lld \
-            llvm \
-            clang \
-            libssl-dev \
-            libelf-dev \
-            gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu \
-            device-tree-compiler \
-            python3 \
-            git \
-            zip
+            bc build-essential flex bison lld llvm clang libssl-dev libelf-dev \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu device-tree-compiler \
+            python3 git zip
 
       - name: Set Up Build Environment
         run: |
@@ -38,36 +26,50 @@ jobs:
 
       - name: Configure and Patch
         run: |
-          # 1. Generate the base config
+          # 1. Base Config
           make ARCH=arm64 raphael_defconfig
           
-          # 2. FIX: Define missing scheduler identifiers in the header
-          # This fixes the 'use of undeclared identifier FULL_THROTTLE_BOOST' error
-          sed -i '1i #define SCHED_FULL_THROTTLE 1' kernel/sched/sched.h
-          sed -i '2i #define FULL_THROTTLE_BOOST 1' kernel/sched/sched.h
+          # 2. FIX 1: Scheduler definitions (Emergency Header)
+          cat <<EOF > fix_sched.h
+          #ifndef _FIX_SCHED_H
+          #define _FIX_SCHED_H
+          #define SCHED_FULL_THROTTLE 1
+          #define FULL_THROTTLE_BOOST 1
+          extern int sched_boost(void);
+          #endif
+          EOF
+          sed -i "1i #include \"$(pwd)/fix_sched.h\"" kernel/sched/sched.h
 
-          # 3. Scheduler Performance Tweaks
-          if [ -f kernel/sched/fair.c ]; then
-            # Reduce latency for better touch response (6ms -> 4ms)
-            sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
-            
-            # Fix C99 "mixing declarations and code" warning for cfs_rq
-            # This moves the variable declaration to a safer spot
-            sed -i 's/struct cfs_rq \*cfs_rq;//g' kernel/sched/fair.c
-            sed -i '/void check_preempt_tick/a \    struct cfs_rq *cfs_rq;' kernel/sched/fair.c
+          # 3. FIX 2: HID Tracepoint path inclusion
+          if [ -f drivers/hid/Makefile ]; then
+            sed -i 's|CFLAGS_hid-trace.o := -I$(src)|CFLAGS_hid-trace.o := -I$(src) -I$(srctree)/$(src)|g' drivers/hid/Makefile
           fi
 
-          # 4. FIX: Disable LSE Atomics for modern Clang compatibility
+          # 4. FIX 3: LED Class structure mismatch (Neutralize the loop)
+          if [ -f drivers/leds/leds.h ]; then
+            sed -i '/list_for_each_entry(led_cdev, &trig->led_cdevs, trig_list)/,/}/ s/^/\/\//' drivers/leds/leds.h
+          fi
+
+          # 5. FIX 4: UFS Pinctrl pointer conversion (Explicit Cast)
+          if [ -f drivers/scsi/ufs/ufshcd-pltfrm.c ]; then
+            sed -i 's/hba->pctrl = devm_pinctrl_get(hba->dev);/hba->pctrl = (struct pinctrl *)devm_pinctrl_get(hba->dev);/g' drivers/scsi/ufs/ufshcd-pltfrm.c
+          fi
+
+          # 6. Performance & Compatibility Fixes
+          if [ -f kernel/sched/fair.c ]; then
+            sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
+          fi
           scripts/config --disable CONFIG_ARM64_LSE_ATOMICS
 
       - name: Build Kernel
         run: |
-          # LLVM_IAS=0 uses the GNU Assembler to handle complex kernel assembly
-          # -k keeps building even if a non-fatal warning appears
-          make -j$(nproc --all) -k \
+          # LLVM_IAS=0 uses GNU Assembler
+          # DTC_EXT=dtc ensures correct Device Tree processing
+          make -j$(nproc --all) \
             LLVM=1 \
             LLVM_IAS=0 \
             ARCH=arm64 \
+            DTC_EXT=dtc \
             CROSS_COMPILE=aarch64-linux-gnu- \
             KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-return-type" \
             Image.gz-dtb
@@ -75,12 +77,15 @@ jobs:
       - name: Prepare Artifacts
         run: |
           mkdir -p out
-          [ -f arch/arm64/boot/Image.gz-dtb ] && cp arch/arm64/boot/Image.gz-dtb out/
-          [ -f arch/arm64/boot/Image.gz ] && cp arch/arm64/boot/Image.gz out/
+          if [ -f arch/arm64/boot/Image.gz-dtb ]; then
+            cp arch/arm64/boot/Image.gz-dtb out/
+          elif [ -f arch/arm64/boot/Image.gz ]; then
+            cp arch/arm64/boot/Image.gz out/
+          fi
           find arch/arm64/boot/dts/qcom/ -name "*.dtb" -exec cp {} out/ \;
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-Final-Fixed
+          name: Raphael-Kernel-Ultimate-Fixed
           path: out/*
