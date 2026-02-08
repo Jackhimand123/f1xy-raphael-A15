@@ -25,9 +25,9 @@
 #include <linux/uaccess.h>
 #include <linux/mhi.h>
 #include "mhi_qcom.h"
-/* --- FIX START: Place this immediately after #include "mhi_qcom.h" --- */
-struct mhi_controller; 
 
+/* FORWARD DECLARATIONS - Keep these as high as possible */
+struct mhi_controller;
 int mhi_arch_iommu_init(struct mhi_controller *mhi_cntrl);
 void mhi_arch_iommu_deinit(struct mhi_controller *mhi_cntrl);
 int mhi_arch_pcie_init(struct mhi_controller *mhi_cntrl);
@@ -38,6 +38,12 @@ int mhi_arch_link_lpm_disable(struct mhi_controller *mhi_cntrl);
 int mhi_arch_link_lpm_enable(struct mhi_controller *mhi_cntrl);
 int mhi_arch_power_up(struct mhi_controller *mhi_cntrl);
 void mhi_arch_mission_mode_enter(struct mhi_controller *mhi_cntrl);
+
+#ifndef MAX_MSG_SIZE
+#define MAX_MSG_SIZE 4096
+#endif
+/* END OF FORWARD DECLARATIONS */
+
 
 #ifndef MAX_MSG_SIZE
 #define MAX_MSG_SIZE 4096
