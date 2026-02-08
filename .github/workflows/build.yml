@@ -38,45 +38,45 @@ jobs:
           #define MAX_MSG_SIZE 255
           #endif
           EOF
+          
           # Inject into core headers
           sed -i "1i #include \"$(pwd)/fix_global.h\"" kernel/sched/sched.h
-          # Also inject into MHI to fix MAX_MSG_SIZE
+          
+          # 3. NUCLEAR FIX: HID Tracepoint path
+          # We link the header to the current directory so the trace macro finds it at ./hid-trace.h
+          if [ -f drivers/hid/hid-trace.h ]; then
+            ln -sf drivers/hid/hid-trace.h ./hid-trace.h
+          fi
+
+          # 4. FIX: MHI Driver Errors
           if [ -f drivers/bus/mhi/controllers/mhi_arch_qcom.c ]; then
              sed -i "1i #include \"$(pwd)/fix_global.h\"" drivers/bus/mhi/controllers/mhi_arch_qcom.c
-             # Fix the IPC pointer conversion
              sed -i 's/ipc_log_context_create/(void *)ipc_log_context_create/g' drivers/bus/mhi/controllers/mhi_arch_qcom.c
           fi
 
-          # 3. FIX: HID Tracepoint path
-          if [ -f drivers/hid/Makefile ]; then
-            sed -i 's|CFLAGS_hid-trace.o := -I$(src)|CFLAGS_hid-trace.o := -I$(src) -I$(srctree)/$(src)|g' drivers/hid/Makefile
-          fi
-
-          # 4. FIX: LED Class mismatch
+          # 5. FIX: LED Class structure mismatch
           if [ -f drivers/leds/leds.h ]; then
             sed -i '/list_for_each_entry(led_cdev, &trig->led_cdevs, trig_list)/,/}/ s/^/\/\//' drivers/leds/leds.h
           fi
 
-          # 5. FIX: UFS Pinctrl cast
+          # 6. FIX: UFS Pinctrl cast
           if [ -f drivers/scsi/ufs/ufshcd-pltfrm.c ]; then
             sed -i 's/hba->pctrl = devm_pinctrl_get(hba->dev);/hba->pctrl = (struct pinctrl *)devm_pinctrl_get(hba->dev);/g' drivers/scsi/ufs/ufshcd-pltfrm.c
           fi
 
-          # 6. Performance & Compatibility
-          if [ -f kernel/sched/fair.c ]; then
-            sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
-          fi
+          # 7. Compatibility
           scripts/config --disable CONFIG_ARM64_LSE_ATOMICS
 
       - name: Build Kernel
         run: |
+          # We keep the -I include just in case, but the ln -sf is the real hero here
           make -j$(nproc --all) \
             LLVM=1 \
             LLVM_IAS=0 \
             ARCH=arm64 \
             DTC_EXT=dtc \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-return-type" \
+            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-return-type -I$(pwd)/drivers/hid -I$(pwd)" \
             Image.gz-dtb
 
       - name: Prepare Artifacts
@@ -88,5 +88,5 @@ jobs:
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-A15-V9
+          name: Raphael-Kernel-A15-V11
           path: out/*
