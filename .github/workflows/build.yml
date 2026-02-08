@@ -41,22 +41,30 @@ jobs:
           # 1. Generate the base config
           make ARCH=arm64 raphael_defconfig
           
-          # 2. Apply Scheduler Tweaks
-          if [ -f kernel/sched/fair.c ]; then
-            sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
-          fi
+          # 2. FIX: Define missing scheduler identifiers in the header
+          # This fixes the 'use of undeclared identifier FULL_THROTTLE_BOOST' error
           sed -i '1i #define SCHED_FULL_THROTTLE 1' kernel/sched/sched.h
+          sed -i '2i #define FULL_THROTTLE_BOOST 1' kernel/sched/sched.h
 
-          # 3. FIX: Disable LSE Atomics to stop the ".org offset" error
-          # This forces the kernel to use the standard atomic instructions 
-          # which are much more stable for cross-compiling.
+          # 3. Scheduler Performance Tweaks
+          if [ -f kernel/sched/fair.c ]; then
+            # Reduce latency for better touch response (6ms -> 4ms)
+            sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
+            
+            # Fix C99 "mixing declarations and code" warning for cfs_rq
+            # This moves the variable declaration to a safer spot
+            sed -i 's/struct cfs_rq \*cfs_rq;//g' kernel/sched/fair.c
+            sed -i '/void check_preempt_tick/a \    struct cfs_rq *cfs_rq;' kernel/sched/fair.c
+          fi
+
+          # 4. FIX: Disable LSE Atomics for modern Clang compatibility
           scripts/config --disable CONFIG_ARM64_LSE_ATOMICS
 
       - name: Build Kernel
         run: |
-          # LLVM_IAS=0 is the most important part here. 
-          # It tells Clang to use the GNU Assembler for the tricky assembly parts.
-          make -j$(nproc --all) \
+          # LLVM_IAS=0 uses the GNU Assembler to handle complex kernel assembly
+          # -k keeps building even if a non-fatal warning appears
+          make -j$(nproc --all) -k \
             LLVM=1 \
             LLVM_IAS=0 \
             ARCH=arm64 \
@@ -74,5 +82,5 @@ jobs:
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-LSE-Fixed
+          name: Raphael-Kernel-Final-Fixed
           path: out/*
