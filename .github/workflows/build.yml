@@ -21,13 +21,12 @@ jobs:
           # 1. Define missing Boost ID at the top of the header
           sed -i '1i #define FULL_THROTTLE_BOOST 2' include/linux/sched.h
           
-          # 2. Add 'mark_reserved' and 'trace' to the VERY TOP of fair.c
-          # This prevents "conflicting types" because the compiler sees them first.
+          # 2. Add 'mark_reserved' and the 7-ARGUMENT 'trace' function to the top of fair.c
+          # This matches the exact number of parameters the compiler is seeing
           sed -i '1i void mark_reserved(int cpu) {}' kernel/sched/fair.c
-          sed -i '2i void trace_sched_load_balance_skip_tasks(int a, int b, int c, int d, int e) {}' kernel/sched/fair.c
+          sed -i '2i void trace_sched_load_balance_skip_tasks(int a, int b, int c, int d, int e, int f, unsigned long g) {}' kernel/sched/fair.c
           
-          # 3. Fix the "Mixing declarations and code" error (C90 violation)
-          # We search for the problematic line and move it up.
+          # 3. Fix the "Mixing declarations and code" error
           sed -i '/struct cfs_rq \*cfs_rq;/d' kernel/sched/fair.c
           sed -i '3i struct cfs_rq *cfs_rq;' kernel/sched/fair.c
 
@@ -46,27 +45,28 @@ jobs:
           scripts/config --enable CONFIG_KALLSYMS_ALL
           scripts/config --enable CONFIG_MODULES
           
-          # Fastboot & Boot stability fixes
+          # DTB Fix: Avoid 'embedded-dtb.o' error by disabling the internal trigger
+          scripts/config --disable CONFIG_BUILD_ARM64_EMBEDDED_DTB
           scripts/config --enable CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE
-          scripts/config --enable CONFIG_BUILD_ARM64_DT_OVERLAY
           
           make olddefconfig
           
-          # Build with KCFLAGS to ignore minor non-critical warnings
+          # Build core kernel and device trees
           make -j$(nproc --all) \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-declaration-after-statement" \
-            Image.gz-dtb dtbs modules
+            Image.gz dtbs modules
 
       - name: Organize Artifacts
         if: always()
         run: |
-          mkdir -p out/modules
-          if [ -f arch/arm64/boot/Image.gz-dtb ]; then
-            cp arch/arm64/boot/Image.gz-dtb out/f1xy-A15-boot.img
+          mkdir -p out
+          # Manual Concatenation: Glue the kernel and DTB together for Raphael
+          if [ -f arch/arm64/boot/Image.gz ]; then
+            cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/qcom/sm8150-v2.dtb > out/f1xy-A15-boot.img
           fi
-          find . -name "*.ko" -exec cp {} out/modules/ \;
+          find . -name "*.ko" -exec cp {} out/ \;
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
