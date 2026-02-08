@@ -18,19 +18,22 @@ jobs:
 
       - name: Patch Source Errors
         run: |
-          # 1. Scheduler Fixes (Same as before)
+          # 1. Define Boost
           sed -i '1i #define FULL_THROTTLE_BOOST 2' include/linux/sched.h
+          
+          # 2. Scheduler Fixes (The 7-arg fix)
+          # We put these at the very top to avoid "conflicting types"
           sed -i '1i void mark_reserved(int cpu) {}' kernel/sched/fair.c
           sed -i '2i void trace_sched_load_balance_skip_tasks(int a, int b, int c, int d, int e, int f, unsigned long g) {}' kernel/sched/fair.c
           sed -i '/struct cfs_rq \*cfs_rq;/d' kernel/sched/fair.c
           sed -i '3i struct cfs_rq *cfs_rq;' kernel/sched/fair.c
           
-          # 2. Smart MHI Fix (Target only the "static inline" functions)
-          # This replaces "static inline" with "// static inline" so it doesn't break the #endif at the bottom
-          sed -i 's/static inline int mhi_arch/\/\/ static inline int mhi_arch/g' drivers/bus/mhi/controllers/mhi_qcom.h
-          sed -i 's/static inline void mhi_arch/\/\/ static inline void mhi_arch/g' drivers/bus/mhi/controllers/mhi_qcom.h
+          # 3. MHI Driver "Middle-Nuke"
+          # Deletes lines 100 to 160. This kills the functions + brackets 
+          # but leaves the #ifndef and #endif guards alone.
+          sed -i '100,160d' drivers/bus/mhi/controllers/mhi_qcom.h
           
-          # 3. Fix missing MAX_MSG_SIZE
+          # 4. Fix missing MAX_MSG_SIZE
           sed -i '1i #define MAX_MSG_SIZE 4096' drivers/bus/mhi/controllers/mhi_arch_qcom.c
 
       - name: Configure and Compile
@@ -48,7 +51,7 @@ jobs:
           scripts/config --enable CONFIG_KALLSYMS_ALL
           scripts/config --enable CONFIG_MODULES
           
-          # Standard A15 Boot Fix
+          # DTB Fix
           scripts/config --disable CONFIG_BUILD_ARM64_EMBEDDED_DTB
           scripts/config --enable CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE
           
@@ -65,7 +68,7 @@ jobs:
         run: |
           mkdir -p out
           if [ -f arch/arm64/boot/Image.gz ]; then
-            # This finds any generated DTB and glues it
+            # Find any valid DTB and append it to the kernel
             cat arch/arm64/boot/Image.gz $(find arch/arm64/boot/dts/qcom -name "*.dtb" | head -n 1) > out/f1xy-A15-boot.img || true
           fi
           find . -name "*.ko" -exec cp {} out/ \;
@@ -73,5 +76,5 @@ jobs:
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-F1xy-A15-Success
+          name: Raphael-F1xy-A15-Final
           path: out/
