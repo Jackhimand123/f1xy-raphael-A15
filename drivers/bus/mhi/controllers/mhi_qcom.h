@@ -83,13 +83,15 @@ struct mhi_dev {
 	u32 oem_pk_hash[MHI_BHI_OEMPKHASH_SEG];
 };
 
+/* Forward reference to controller struct */
+struct mhi_controller;
+
 void mhi_deinit_pci_dev(struct mhi_controller *mhi_cntrl);
 int mhi_pci_probe(struct pci_dev *pci_dev,
 		  const struct pci_device_id *device_id);
 void mhi_reg_write_work(struct work_struct *w);
 
-#ifdef CONFIG_ARCH_QCOM
-
+/* Unconditional declarations to prevent A15 type conflicts */
 int mhi_arch_link_lpm_disable(struct mhi_controller *mhi_cntrl);
 int mhi_arch_link_lpm_enable(struct mhi_controller *mhi_cntrl);
 void mhi_arch_mission_mode_enter(struct mhi_controller *mhi_cntrl);
@@ -100,60 +102,5 @@ int mhi_arch_iommu_init(struct mhi_controller *mhi_cntrl);
 void mhi_arch_iommu_deinit(struct mhi_controller *mhi_cntrl);
 int mhi_arch_link_suspend(struct mhi_controller *mhi_cntrl);
 int mhi_arch_link_resume(struct mhi_controller *mhi_cntrl);
-
-#else
-
-/*static inline int mhi_arch_iommu_init(struct mhi_controller *mhi_cntrl)
-{
-	struct mhi_dev *mhi_dev = mhi_controller_get_devdata(mhi_cntrl);
-
-	mhi_cntrl->dev = &mhi_dev->pci_dev->dev;
-
-	return dma_set_mask_and_coherent(mhi_cntrl->dev, DMA_BIT_MASK(64));
-}
-
-static inline void mhi_arch_iommu_deinit(struct mhi_controller *mhi_cntrl)
-{
-}
-
-static inline int mhi_arch_pcie_init(struct mhi_controller *mhi_cntrl)
-{
-	return 0;
-}
-
-static inline void mhi_arch_pcie_deinit(struct mhi_controller *mhi_cntrl)
-{
-}
-
-static inline int mhi_arch_link_suspend(struct mhi_controller *mhi_cntrl)
-{
-	return 0;
-}
-
-static inline int mhi_arch_link_resume(struct mhi_controller *mhi_cntrl)
-{
-	return 0;
-}
-
-static inline int mhi_arch_power_up(struct mhi_controller *mhi_cntrl)
-{
-	return 0;
-}
-
-static inline void mhi_arch_mission_mode_enter(struct mhi_controller *mhi_cntrl)
-{
-}
-
-static inline int mhi_arch_link_lpm_disable(struct mhi_controller *mhi_cntrl)
-{
-	return 0;
-}
-
-static inline int mhi_arch_link_lpm_enable(struct mhi_controller *mhi_cntrl)
-{
-	return 0;
-}
-*/
-#endif
 
 #endif /* _MHI_QCOM_ */
