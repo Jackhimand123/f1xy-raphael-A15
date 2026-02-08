@@ -18,18 +18,20 @@ jobs:
 
       - name: Patch Source Errors
         run: |
-          # 1. Define Boost
+          # 1. Scheduler Fixes (The 7-arg fix)
           sed -i '1i #define FULL_THROTTLE_BOOST 2' include/linux/sched.h
-          
-          # 2. Scheduler Fixes (The 7-arg fix)
           sed -i '1i void mark_reserved(int cpu) {}' kernel/sched/fair.c
           sed -i '2i void trace_sched_load_balance_skip_tasks(int a, int b, int c, int d, int e, int f, unsigned long g) {}' kernel/sched/fair.c
           sed -i '/struct cfs_rq \*cfs_rq;/d' kernel/sched/fair.c
           sed -i '3i struct cfs_rq *cfs_rq;' kernel/sched/fair.c
           
-          # 3. MHI Driver Fix (DELETING the conflicting block entirely)
-          # This removes lines 147 through 156 to get rid of the redefinition and the brackets
-          sed -i '147,156d' drivers/bus/mhi/controllers/mhi_qcom.h
+          # 2. MHI "Nuke" Fix
+          # Instead of deleting lines, we comment out the entire problematic range (90 to 160)
+          # this stops all the "redefinition" errors at once.
+          sed -i '90,160s/^/\/\//' drivers/bus/mhi/controllers/mhi_qcom.h
+          
+          # 3. Fix missing MAX_MSG_SIZE
+          sed -i '1i #define MAX_MSG_SIZE 4096' drivers/bus/mhi/controllers/mhi_arch_qcom.c
 
       - name: Configure and Compile
         run: |
@@ -63,8 +65,8 @@ jobs:
         run: |
           mkdir -p out
           if [ -f arch/arm64/boot/Image.gz ]; then
-            # Verify if sm8150-v2.dtb is the right name for your source
-            cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/qcom/sm8150-v2.dtb > out/f1xy-A15-boot.img || true
+            # Find the first available DTB and glue it
+            cat arch/arm64/boot/Image.gz $(find arch/arm64/boot/dts/qcom -name "*.dtb" | head -n 1) > out/f1xy-A15-boot.img || true
           fi
           find . -name "*.ko" -exec cp {} out/ \;
 
