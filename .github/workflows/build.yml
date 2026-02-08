@@ -18,17 +18,17 @@ jobs:
 
       - name: Patch Source Errors
         run: |
-          # 1. Scheduler Fixes (The 7-arg fix)
+          # 1. Scheduler Fixes (Same as before)
           sed -i '1i #define FULL_THROTTLE_BOOST 2' include/linux/sched.h
           sed -i '1i void mark_reserved(int cpu) {}' kernel/sched/fair.c
           sed -i '2i void trace_sched_load_balance_skip_tasks(int a, int b, int c, int d, int e, int f, unsigned long g) {}' kernel/sched/fair.c
           sed -i '/struct cfs_rq \*cfs_rq;/d' kernel/sched/fair.c
           sed -i '3i struct cfs_rq *cfs_rq;' kernel/sched/fair.c
           
-          # 2. MHI "Nuke" Fix
-          # Instead of deleting lines, we comment out the entire problematic range (90 to 160)
-          # this stops all the "redefinition" errors at once.
-          sed -i '90,160s/^/\/\//' drivers/bus/mhi/controllers/mhi_qcom.h
+          # 2. Smart MHI Fix (Target only the "static inline" functions)
+          # This replaces "static inline" with "// static inline" so it doesn't break the #endif at the bottom
+          sed -i 's/static inline int mhi_arch/\/\/ static inline int mhi_arch/g' drivers/bus/mhi/controllers/mhi_qcom.h
+          sed -i 's/static inline void mhi_arch/\/\/ static inline void mhi_arch/g' drivers/bus/mhi/controllers/mhi_qcom.h
           
           # 3. Fix missing MAX_MSG_SIZE
           sed -i '1i #define MAX_MSG_SIZE 4096' drivers/bus/mhi/controllers/mhi_arch_qcom.c
@@ -43,12 +43,12 @@ jobs:
           
           make raphael_defconfig
           
-          # Features
+          # Hacks & Game Feature Support
           scripts/config --enable CONFIG_KALLSYMS
           scripts/config --enable CONFIG_KALLSYMS_ALL
           scripts/config --enable CONFIG_MODULES
           
-          # DTB Fix
+          # Standard A15 Boot Fix
           scripts/config --disable CONFIG_BUILD_ARM64_EMBEDDED_DTB
           scripts/config --enable CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE
           
@@ -65,7 +65,7 @@ jobs:
         run: |
           mkdir -p out
           if [ -f arch/arm64/boot/Image.gz ]; then
-            # Find the first available DTB and glue it
+            # This finds any generated DTB and glues it
             cat arch/arm64/boot/Image.gz $(find arch/arm64/boot/dts/qcom -name "*.dtb" | head -n 1) > out/f1xy-A15-boot.img || true
           fi
           find . -name "*.ko" -exec cp {} out/ \;
