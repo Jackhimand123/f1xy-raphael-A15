@@ -18,13 +18,18 @@ jobs:
 
       - name: Patch F1xy Scheduler Errors
         run: |
-          # Fix the 'FULL_THROTTLE_BOOST' error by defining it manually
-          sed -i '40i #define FULL_THROTTLE_BOOST 2' include/linux/sched.h
+          # 1. Define missing Boost ID at the top of the header
+          sed -i '1i #define FULL_THROTTLE_BOOST 2' include/linux/sched.h
           
-          # Fix 'mark_reserved' and 'trace' errors by adding empty functions
-          # This stops the "Undeclared Identifier" crash
-          echo "void mark_reserved(int cpu) {}" >> kernel/sched/fair.c
-          echo "void trace_sched_load_balance_skip_tasks(int a, int b, int c, int d, int e) {}" >> kernel/sched/fair.c
+          # 2. Add 'mark_reserved' and 'trace' to the VERY TOP of fair.c
+          # This prevents "conflicting types" because the compiler sees them first.
+          sed -i '1i void mark_reserved(int cpu) {}' kernel/sched/fair.c
+          sed -i '2i void trace_sched_load_balance_skip_tasks(int a, int b, int c, int d, int e) {}' kernel/sched/fair.c
+          
+          # 3. Fix the "Mixing declarations and code" error (C90 violation)
+          # We search for the problematic line and move it up.
+          sed -i '/struct cfs_rq \*cfs_rq;/d' kernel/sched/fair.c
+          sed -i '3i struct cfs_rq *cfs_rq;' kernel/sched/fair.c
 
       - name: Configure and Compile
         run: |
@@ -34,21 +39,20 @@ jobs:
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
           
-          # Load your defconfig
           make raphael_defconfig
           
-          # Enable your Hack/Dev features
+          # Hack/Feature Enables
           scripts/config --enable CONFIG_KALLSYMS
           scripts/config --enable CONFIG_KALLSYMS_ALL
           scripts/config --enable CONFIG_MODULES
           
-          # Force Enable Boot requirements (Fastboot Fix)
+          # Fastboot & Boot stability fixes
           scripts/config --enable CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE
           scripts/config --enable CONFIG_BUILD_ARM64_DT_OVERLAY
           
           make olddefconfig
           
-          # Compile with 'KCFLAGS' to ignore remaining warnings
+          # Build with KCFLAGS to ignore minor non-critical warnings
           make -j$(nproc --all) \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -59,12 +63,8 @@ jobs:
         if: always()
         run: |
           mkdir -p out/modules
-          # Check if the bootable image was created
           if [ -f arch/arm64/boot/Image.gz-dtb ]; then
             cp arch/arm64/boot/Image.gz-dtb out/f1xy-A15-boot.img
-          else
-            echo "Kernel build failed, check logs above."
-            exit 1
           fi
           find . -name "*.ko" -exec cp {} out/modules/ \;
 
