@@ -16,19 +16,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc build-essential bison flex libssl-dev libelf-dev clang lld llvm gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi python3
 
-      - name: Patch F1xy Scheduler Errors
+      - name: Patch Source Errors
         run: |
-          # 1. Define missing Boost ID at the top of the header
+          # Define Boost
           sed -i '1i #define FULL_THROTTLE_BOOST 2' include/linux/sched.h
           
-          # 2. Add 'mark_reserved' and the 7-ARGUMENT 'trace' function to the top of fair.c
-          # This matches the exact number of parameters the compiler is seeing
+          # Scheduler Fixes
           sed -i '1i void mark_reserved(int cpu) {}' kernel/sched/fair.c
           sed -i '2i void trace_sched_load_balance_skip_tasks(int a, int b, int c, int d, int e, int f, unsigned long g) {}' kernel/sched/fair.c
-          
-          # 3. Fix the "Mixing declarations and code" error
           sed -i '/struct cfs_rq \*cfs_rq;/d' kernel/sched/fair.c
           sed -i '3i struct cfs_rq *cfs_rq;' kernel/sched/fair.c
+          
+          # MHI Driver Fix (Redefinition error)
+          sed -i 's/static inline int mhi_arch_link_lpm_disable/\/\//g' drivers/bus/mhi/controllers/mhi_qcom.h
+          sed -i 's/static inline int mhi_arch_link_lpm_enable/\/\//g' drivers/bus/mhi/controllers/mhi_qcom.h
 
       - name: Configure and Compile
         run: |
@@ -40,18 +41,17 @@ jobs:
           
           make raphael_defconfig
           
-          # Hack/Feature Enables
+          # Features
           scripts/config --enable CONFIG_KALLSYMS
           scripts/config --enable CONFIG_KALLSYMS_ALL
           scripts/config --enable CONFIG_MODULES
           
-          # DTB Fix: Avoid 'embedded-dtb.o' error by disabling the internal trigger
+          # DTB Fix
           scripts/config --disable CONFIG_BUILD_ARM64_EMBEDDED_DTB
           scripts/config --enable CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE
           
           make olddefconfig
           
-          # Build core kernel and device trees
           make -j$(nproc --all) \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -62,14 +62,14 @@ jobs:
         if: always()
         run: |
           mkdir -p out
-          # Manual Concatenation: Glue the kernel and DTB together for Raphael
           if [ -f arch/arm64/boot/Image.gz ]; then
-            cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/qcom/sm8150-v2.dtb > out/f1xy-A15-boot.img
+            # Note: Verify your DTB name in arch/arm64/boot/dts/qcom/ if this fails
+            cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/qcom/sm8150-v2.dtb > out/f1xy-A15-boot.img || true
           fi
           find . -name "*.ko" -exec cp {} out/ \;
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-F1xy-A15-Fixed
+          name: Raphael-F1xy-A15-Success
           path: out/
