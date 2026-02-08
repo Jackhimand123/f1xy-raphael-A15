@@ -25,51 +25,10 @@
 #include <linux/uaccess.h>
 #include <linux/mhi.h>
 #include "mhi_qcom.h"
-/* --- FINAL RECOVERY BLOCK --- */
-#ifdef mhi_arch_iommu_deinit
-#undef mhi_arch_iommu_deinit
-#endif
-
-struct mhi_controller;
-
-extern int mhi_arch_iommu_init(struct mhi_controller *mhi_cntrl);
-extern void mhi_arch_iommu_deinit(struct mhi_controller *mhi_cntrl);
-extern int mhi_arch_pcie_init(struct mhi_controller *mhi_cntrl);
-extern void mhi_arch_pcie_deinit(struct mhi_controller *mhi_cntrl);
-extern int mhi_arch_link_suspend(struct mhi_controller *mhi_cntrl);
-extern int mhi_arch_link_resume(struct mhi_controller *mhi_cntrl);
-extern int mhi_arch_link_lpm_disable(struct mhi_controller *mhi_cntrl);
-extern int mhi_arch_link_lpm_enable(struct mhi_controller *mhi_cntrl);
-extern int mhi_arch_power_up(struct mhi_controller *mhi_cntrl);
-extern void mhi_arch_mission_mode_enter(struct mhi_controller *mhi_cntrl);
 
 #ifndef MAX_MSG_SIZE
 #define MAX_MSG_SIZE 4096
 #endif
-/* --- END OF FIX --- */
-
-struct firmware_info {
-	unsigned int dev_id;
-	const char *fw_image;
-	const char *edl_image;
-};
-
-
-#ifndef MAX_MSG_SIZE
-#define MAX_MSG_SIZE 4096
-#endif
-/* END OF FORWARD DECLARATIONS */
-
-
-#ifndef MAX_MSG_SIZE
-#define MAX_MSG_SIZE 4096
-#endif
-/* --- FIX END --- */
-
-#ifndef MAX_MSG_SIZE
-#define MAX_MSG_SIZE 4096
-#endif
-
 
 struct firmware_info {
 	unsigned int dev_id;
@@ -214,16 +173,6 @@ static int mhi_init_pci_dev(struct mhi_controller *mhi_cntrl)
 	pm_runtime_use_autosuspend(&pci_dev->dev);
 	pm_suspend_ignore_children(&pci_dev->dev, true);
 
-	/*
-	 * pci framework will increment usage count (twice) before
-	 * calling local device driver probe function.
-	 * 1st pci.c pci_pm_init() calls pm_runtime_forbid
-	 * 2nd pci-driver.c local_pci_probe calls pm_runtime_get_sync
-	 * Framework expect pci device driver to call
-	 * pm_runtime_put_noidle to decrement usage count after
-	 * successful probe and and call pm_runtime_allow to enable
-	 * runtime suspend.
-	 */
 	pm_runtime_mark_last_busy(&pci_dev->dev);
 	pm_runtime_put_noidle(&pci_dev->dev);
 
@@ -279,7 +228,6 @@ static int mhi_runtime_suspend(struct device *dev)
 
 	ret = mhi_arch_link_suspend(mhi_cntrl);
 
-	/* failed suspending link abort mhi suspend */
 	if (ret) {
 		MHI_LOG("Failed to suspend link, abort suspend\n");
 		mhi_pm_resume(mhi_cntrl);
@@ -295,22 +243,6 @@ exit_runtime_suspend:
 
 static int mhi_runtime_idle(struct device *dev)
 {
-	struct mhi_controller *mhi_cntrl = dev_get_drvdata(dev);
-
-	MHI_LOG("Entered returning -EBUSY\n");
-
-	/*
-	 * RPM framework during runtime resume always calls
-	 * rpm_idle to see if device ready to suspend.
-	 * If dev.power usage_count count is 0, rpm fw will call
-	 * rpm_idle cb to see if device is ready to suspend.
-	 * if cb return 0, or cb not defined the framework will
-	 * assume device driver is ready to suspend;
-	 * therefore, fw will schedule runtime suspend.
-	 * In MHI power management, MHI host shall go to
-	 * runtime suspend only after entering MHI State M2, even if
-	 * usage count is 0.  Return -EBUSY to disable automatic suspend.
-	 */
 	return -EBUSY;
 }
 
@@ -330,13 +262,11 @@ static int mhi_runtime_resume(struct device *dev)
 		return 0;
 	}
 
-	/* turn on link */
 	ret = mhi_arch_link_resume(mhi_cntrl);
 	if (ret)
 		goto rpm_resume_exit;
 
 
-	/* transition to M0 state */
 	if (mhi_dev->suspend_mode == MHI_DEFAULT_SUSPEND)
 		ret = mhi_pm_resume(mhi_cntrl);
 	else
@@ -372,31 +302,13 @@ int mhi_system_suspend(struct device *dev)
 		return 0;
 	}
 
-	/*
-	 * pci framework always makes a dummy vote to rpm
-	 * framework to resume before calling system suspend
-	 * hence usage count is minimum one
-	 */
 	if (atomic_read(&dev->power.usage_count) > 1) {
-		/*
-		 * clients have requested to keep link on, try
-		 * fast suspend. No need to notify clients since
-		 * we will not be turning off the pcie link
-		 */
 		ret = mhi_pm_fast_suspend(mhi_cntrl, false);
 		mhi_dev->suspend_mode = MHI_FAST_LINK_ON;
 	} else {
-		/* try normal suspend */
 		mhi_dev->suspend_mode = MHI_DEFAULT_SUSPEND;
 		ret = mhi_pm_suspend(mhi_cntrl);
 
-		/*
-		 * normal suspend failed because we're busy, try
-		 * fast suspend before aborting system suspend.
-		 * this could happens if client has disabled
-		 * device lpm but no active vote for PCIe from
-		 * apps processor
-		 */
 		if (ret == -EBUSY) {
 			ret = mhi_pm_fast_suspend(mhi_cntrl, true);
 			mhi_dev->suspend_mode = MHI_FAST_LINK_ON;
@@ -411,7 +323,6 @@ int mhi_system_suspend(struct device *dev)
 
 	ret = mhi_arch_link_suspend(mhi_cntrl);
 
-	/* failed suspending link abort mhi suspend */
 	if (ret) {
 		MHI_LOG("Failed to suspend link, abort suspend\n");
 		if (mhi_dev->suspend_mode == MHI_DEFAULT_SUSPEND)
@@ -447,13 +358,6 @@ static int mhi_force_suspend(struct mhi_controller *mhi_cntrl)
 	mutex_lock(&mhi_cntrl->pm_mutex);
 
 	for (; itr; itr--) {
-		/*
-		 * This function get called soon as device entered mission mode
-		 * so most of the channels are still in disabled state. However,
-		 * sbl channels are active and clients could be trying to close
-		 * channels while we trying to suspend the link. So, we need to
-		 * re-try if MHI is busy
-		 */
 		ret = mhi_pm_suspend(mhi_cntrl);
 		if (!ret || ret != -EBUSY)
 			break;
@@ -476,26 +380,22 @@ exit_force_suspend:
 	return ret;
 }
 
-/* checks if link is down */
 static int mhi_link_status(struct mhi_controller *mhi_cntrl, void *priv)
 {
 	struct mhi_dev *mhi_dev = priv;
 	u16 dev_id;
 	int ret;
 
-	/* try reading device id, if dev id don't match, link is down */
 	ret = pci_read_config_word(mhi_dev->pci_dev, PCI_DEVICE_ID, &dev_id);
 
 	return (ret || dev_id != mhi_cntrl->dev_id) ? -EIO : 0;
 }
 
-/* disable PCIe L1 */
 static int mhi_lpm_disable(struct mhi_controller *mhi_cntrl, void *priv)
 {
 	return mhi_arch_link_lpm_disable(mhi_cntrl);
 }
 
-/* enable PCIe L1 */
 static int mhi_lpm_enable(struct mhi_controller *mhi_cntrl, void *priv)
 {
 	return mhi_arch_link_lpm_enable(mhi_cntrl);
@@ -521,12 +421,6 @@ static int mhi_qcom_power_up(struct mhi_controller *mhi_cntrl)
 	int itr = DIV_ROUND_UP(mhi_cntrl->timeout_ms * 1000, delayus);
 	int ret;
 
-	/*
-	 * It's possible device did not go thru a cold reset before
-	 * power up and still in error state. If device in error state,
-	 * we need to trigger a soft reset before continue with power
-	 * up
-	 */
 	if (dev_state == MHI_STATE_SYS_ERR) {
 		mhi_set_mhi_state(mhi_cntrl, MHI_STATE_RESET);
 		while (itr--) {
@@ -535,12 +429,10 @@ static int mhi_qcom_power_up(struct mhi_controller *mhi_cntrl)
 				break;
 			usleep_range(delayus, delayus << 1);
 		}
-		/* device still in error state, abort power up */
 		if (dev_state == MHI_STATE_SYS_ERR)
 			return -EIO;
 	}
 
-	/* when coming out of SSR, initial states are not valid */
 	mhi_cntrl->ee = 0;
 	mhi_cntrl->power_down = false;
 
@@ -550,11 +442,9 @@ static int mhi_qcom_power_up(struct mhi_controller *mhi_cntrl)
 
 	ret = mhi_async_power_up(mhi_cntrl);
 
-	/* Update modem serial Info */
 	if (!ret)
 		mhi_qcom_store_hwinfo(mhi_cntrl);
 
-	/* power up create the dentry */
 	if (mhi_cntrl->dentry) {
 		debugfs_create_file("m0", 0444, mhi_cntrl->dentry, mhi_cntrl,
 				    &debugfs_trigger_m0_fops);
@@ -612,10 +502,6 @@ static void mhi_status_cb(struct mhi_controller *mhi_cntrl,
 		pm_request_autosuspend(dev);
 		break;
 	case MHI_CB_EE_MISSION_MODE:
-		/*
-		 * we need to force a suspend so device can switch to
-		 * mission mode pcie phy settings.
-		 */
 		pm_runtime_get(dev);
 		ret = mhi_force_suspend(mhi_cntrl);
 		if (!ret) {
@@ -634,7 +520,6 @@ static void mhi_status_cb(struct mhi_controller *mhi_cntrl,
 	}
 }
 
-/* capture host SoC XO time in ticks */
 static u64 mhi_time_get(struct mhi_controller *mhi_cntrl, void *priv)
 {
 	return arch_counter_get_cntvct();
@@ -647,7 +532,6 @@ static ssize_t timeout_ms_show(struct device *dev,
 	struct mhi_device *mhi_dev = to_mhi_device(dev);
 	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
 
-	/* buffer provided by sysfs has a minimum size of PAGE_SIZE */
 	return snprintf(buf, PAGE_SIZE, "%u\n", mhi_cntrl->timeout_ms);
 }
 
@@ -764,10 +648,6 @@ static struct mhi_controller *mhi_register_controller(struct pci_dev *pci_dev)
 	use_bb = of_property_read_bool(of_node, "mhi,use-bb");
 	mhi_dev->allow_m1 = of_property_read_bool(of_node, "mhi,allow-m1");
 
-	/*
-	 * if s1 translation enabled or using bounce buffer pull iova addr
-	 * from dt
-	 */
 	if (use_bb || (mhi_dev->smmu_cfg & MHI_SMMU_ATTACH &&
 		       !(mhi_dev->smmu_cfg & MHI_SMMU_S1_BYPASS))) {
 		ret = of_property_count_elems_of_size(of_node, "qcom,addr-win",
@@ -786,10 +666,6 @@ static struct mhi_controller *mhi_register_controller(struct pci_dev *pci_dev)
 	mhi_dev->iova_start = addr_win[0];
 	mhi_dev->iova_stop = addr_win[1];
 
-	/*
-	 * If S1 is enabled, set MHI_CTRL start address to 0 so we can use low
-	 * level mapping api to map buffers outside of smmu domain
-	 */
 	if (mhi_dev->smmu_cfg & MHI_SMMU_ATTACH &&
 	    !(mhi_dev->smmu_cfg & MHI_SMMU_S1_BYPASS))
 		mhi_cntrl->iova_start = 0;
@@ -801,7 +677,6 @@ static struct mhi_controller *mhi_register_controller(struct pci_dev *pci_dev)
 
 	mhi_dev->pci_dev = pci_dev;
 
-	/* setup power management apis */
 	mhi_cntrl->status_cb = mhi_status_cb;
 	mhi_cntrl->runtime_get = mhi_runtime_get;
 	mhi_cntrl->runtime_put = mhi_runtime_put;
@@ -813,7 +688,6 @@ static struct mhi_controller *mhi_register_controller(struct pci_dev *pci_dev)
 	mhi_cntrl->remote_timer_freq = 19200000;
 	mhi_cntrl->local_timer_freq = 19200000;
 
-	/* setup host support for SFR retreival */
 	if (of_property_read_bool(of_node, "mhi,sfr-support"))
 		mhi_cntrl->sfr_len = MHI_MAX_SFR_LEN;
 
@@ -835,9 +709,6 @@ static struct mhi_controller *mhi_register_controller(struct pci_dev *pci_dev)
 
 		if (debug_mode <= MHI_DEBUG_D3)
 			firmware_info = debug_info;
-		MHI_CNTRL_LOG("fw info: debug_mode:%d dev_id:%d image:%s\n",
-			      debug_mode, firmware_info->dev_id,
-			      firmware_info->fw_image);
 	}
 
 	mhi_cntrl->fw_image = firmware_info->fw_image;
@@ -889,7 +760,6 @@ int mhi_pci_probe(struct pci_dev *pci_dev,
 	struct mhi_dev *mhi_dev;
 	int ret;
 
-	/* see if we already registered */
 	mhi_cntrl = mhi_bdf_to_controller(domain, bus, slot, dev_id);
 	if (!mhi_cntrl)
 		mhi_cntrl = mhi_register_controller(pci_dev);
@@ -912,7 +782,6 @@ int mhi_pci_probe(struct pci_dev *pci_dev,
 	if (ret)
 		goto error_init_pci;
 
-	/* start power up sequence */
 	if (!debug_mode) {
 		ret = mhi_qcom_power_up(mhi_cntrl);
 		if (ret)
@@ -920,8 +789,6 @@ int mhi_pci_probe(struct pci_dev *pci_dev,
 	}
 
 	pm_runtime_mark_last_busy(&pci_dev->dev);
-
-	MHI_CNTRL_LOG("Return successful\n");
 
 	return 0;
 
