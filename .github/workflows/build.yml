@@ -43,4 +43,10 @@ jobs:
           mkdir -p out/modules
           # We grab the -dtb version so you don't get stuck in fastboot
           cp arch/arm64/boot/Image.gz-dtb out/f1xy-hack-boot.img
-          find . -
+          find . -name "*.ko" -exec cp {} out/modules/ \;
+
+      - name: Upload Hack Kernel Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Raphael-Hack-Fixed
+          path: out/
