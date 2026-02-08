@@ -13,15 +13,22 @@ jobs:
       - name: Install Toolchain and Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison lld llvm clang libssl-dev libelf-dev aarch64-linux-gnu-gcc
-
-      - name: Apply Scheduler Patches
-        run: |
-          echo "Applying scheduler performance tweaks..."
-          # Example: Boosting the default scheduler latency
-          sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
-          # Adding a simple full throttle definition if missing
-          sed -i '1i #define SCHED_FULL_THROTTLE 1' kernel/sched/sched.h
+          sudo apt-get install -y \
+            bc \
+            build-essential \
+            flex \
+            bison \
+            lld \
+            llvm \
+            clang \
+            libssl-dev \
+            libelf-dev \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            device-tree-compiler \
+            python3 \
+            git \
+            zip
 
       - name: Set Up Build Environment
         run: |
@@ -30,22 +37,49 @@ jobs:
           echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
           echo "CC=clang" >> $GITHUB_ENV
 
+      - name: Apply Scheduler Performance Patches
+        run: |
+          echo "Applying scheduler performance tweaks..."
+          # Speed up scheduling by lowering latency (6ms -> 4ms)
+          if [ -f kernel/sched/fair.c ]; then
+            sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
+          fi
+          # Ensure full throttle definitions are handled
+          sed -i '1i #define SCHED_FULL_THROTTLE 1' kernel/sched/sched.h
+
       - name: Configure and Build
         run: |
-          # Generate the defconfig for Raphael
+          # 1. Clean previous attempts
+          make clean && make mrproper
+          
+          # 2. Use the Raphael defconfig
           make raphael_defconfig
           
-          # Start the build
-          # -Wno-error ensures that minor warnings in old vendor code don't stop the build
-          # especially useful for Android 15's strict compiler
+          # 3. Compile the Kernel
+          # LLVM=1 uses Clang, LLD, and LLVM-Binutils
+          # CROSS_COMPILE=aarch64-linux-gnu- provides the GNU cross-linker for fallback
+          # KCFLAGS="-Wno-error" prevents minor warnings from stopping the build on Android 15
           make -j$(nproc --all) \
-            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes" \
             LLVM=1 \
             LLVM_IAS=1 \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-return-type" \
             Image.gz-dtb
-            
+
+      - name: Prepare Flashable Artifacts
+        run: |
+          mkdir -p out
+          if [ -f arch/arm64/boot/Image.gz-dtb ]; then
+            cp arch/arm64/boot/Image.gz-dtb out/
+          elif [ -f arch/arm64/boot/Image.gz ]; then
+            cp arch/arm64/boot/Image.gz out/
+          fi
+          # Add any DTBs if they were generated separately
+          find arch/arm64/boot/dts/qcom/ -name "*.dtb" -exec cp {} out/ \;
+
       - name: Upload Kernel Image
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-A15
-          path: arch/arm64/boot/Image.gz-dtb
+          name: Raphael-Kernel-A15-Success
+          path: out/*
