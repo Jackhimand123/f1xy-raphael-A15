@@ -35,51 +35,44 @@ jobs:
           echo "ARCH=arm64" >> $GITHUB_ENV
           echo "SUBARCH=arm64" >> $GITHUB_ENV
           echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-          echo "CC=clang" >> $GITHUB_ENV
 
-      - name: Apply Scheduler Performance Patches
+      - name: Configure and Patch
         run: |
-          echo "Applying scheduler performance tweaks..."
-          # Speed up scheduling by lowering latency (6ms -> 4ms)
+          # 1. Generate the base config
+          make ARCH=arm64 raphael_defconfig
+          
+          # 2. Apply Scheduler Tweaks
           if [ -f kernel/sched/fair.c ]; then
             sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
           fi
-          # Ensure full throttle definitions are handled
           sed -i '1i #define SCHED_FULL_THROTTLE 1' kernel/sched/sched.h
 
-      - name: Configure and Build
+          # 3. FIX: Disable LSE Atomics to stop the ".org offset" error
+          # This forces the kernel to use the standard atomic instructions 
+          # which are much more stable for cross-compiling.
+          scripts/config --disable CONFIG_ARM64_LSE_ATOMICS
+
+      - name: Build Kernel
         run: |
-          # 1. Clean previous attempts
-          make clean && make mrproper
-          
-          # 2. Use the Raphael defconfig
-          make raphael_defconfig
-          
-          # 3. Compile the Kernel
-          # LLVM=1 uses Clang, LLD, and LLVM-Binutils
-          # CROSS_COMPILE=aarch64-linux-gnu- provides the GNU cross-linker for fallback
-          # KCFLAGS="-Wno-error" prevents minor warnings from stopping the build on Android 15
+          # LLVM_IAS=0 is the most important part here. 
+          # It tells Clang to use the GNU Assembler for the tricky assembly parts.
           make -j$(nproc --all) \
             LLVM=1 \
-            LLVM_IAS=1 \
+            LLVM_IAS=0 \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-return-type" \
             Image.gz-dtb
 
-      - name: Prepare Flashable Artifacts
+      - name: Prepare Artifacts
         run: |
           mkdir -p out
-          if [ -f arch/arm64/boot/Image.gz-dtb ]; then
-            cp arch/arm64/boot/Image.gz-dtb out/
-          elif [ -f arch/arm64/boot/Image.gz ]; then
-            cp arch/arm64/boot/Image.gz out/
-          fi
-          # Add any DTBs if they were generated separately
+          [ -f arch/arm64/boot/Image.gz-dtb ] && cp arch/arm64/boot/Image.gz-dtb out/
+          [ -f arch/arm64/boot/Image.gz ] && cp arch/arm64/boot/Image.gz out/
           find arch/arm64/boot/dts/qcom/ -name "*.dtb" -exec cp {} out/ \;
 
-      - name: Upload Kernel Image
+      - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-A15-Success
+          name: Raphael-Kernel-LSE-Fixed
           path: out/*
