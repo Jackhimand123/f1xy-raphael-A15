@@ -1,4 +1,5 @@
-name: Build Raphael F1xy A15
+name: Raphael Kernel Build
+
 on:
   workflow_dispatch:
 
@@ -8,63 +9,43 @@ jobs:
     steps:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Install Toolchain
+      - name: Install Toolchain and Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential bison flex libssl-dev libelf-dev clang lld llvm gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi python3
+          sudo apt-get install -y bc build-essential flex bison lld llvm clang libssl-dev libelf-dev aarch64-linux-gnu-gcc
 
-      - name: Patch Scheduler
+      - name: Apply Scheduler Patches
         run: |
-          # These scheduler fixes are strictly required for Android 15 stability
-          sed -i '1i #define FULL_THROTTLE_BOOST 2' include/linux/sched.h
-          sed -i '1i void mark_reserved(int cpu) {}' kernel/sched/fair.c
-          sed -i '2i void trace_sched_load_balance_skip_tasks(int a, int b, int c, int d, int e, int f, unsigned long g) {}' kernel/sched/fair.c
-          sed -i '/struct cfs_rq \*cfs_rq;/d' kernel/sched/fair.c
-          sed -i '3i struct cfs_rq *cfs_rq;' kernel/sched/fair.c
+          echo "Applying scheduler performance tweaks..."
+          # Example: Boosting the default scheduler latency
+          sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
+          # Adding a simple full throttle definition if missing
+          sed -i '1i #define SCHED_FULL_THROTTLE 1' kernel/sched/sched.h
 
-      - name: Configure and Compile
+      - name: Set Up Build Environment
         run: |
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          export CC=clang
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+
+      - name: Configure and Build
+        run: |
+          # Generate the defconfig for Raphael
           make raphael_defconfig
           
-          # Core A15 Features
-          scripts/config --enable CONFIG_KALLSYMS
-          scripts/config --enable CONFIG_KALLSYMS_ALL
-          scripts/config --enable CONFIG_MODULES
-          
-          # Boot Image Compatibility
-          scripts/config --disable CONFIG_BUILD_ARM64_EMBEDDED_DTB
-          scripts/config --enable CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE
-          
-          make olddefconfig
-          
-          # The Build Command
+          # Start the build
+          # -Wno-error ensures that minor warnings in old vendor code don't stop the build
+          # especially useful for Android 15's strict compiler
           make -j$(nproc --all) \
-            CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-declaration-after-statement" \
-            Image.gz dtbs modules
-
-      - name: Organize Artifacts
-        if: always()
-        run: |
-          mkdir -p out
-          if [ -f arch/arm64/boot/Image.gz ]; then
-            # Merge Kernel and Device Tree for flashing
-            cat arch/arm64/boot/Image.gz $(find arch/arm64/boot/dts/qcom -name "*.dtb" | head -n 1) > out/f1xy-A15-boot.img || true
-          fi
-          find . -name "*.ko" -exec cp {} out/ \;
-
-      - name: Upload Kernel
+            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes" \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            Image.gz-dtb
+            
+      - name: Upload Kernel Image
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-F1xy-A15-ManualFix
-          path: out/
+          name: Raphael-Kernel-A15
+          path: arch/arm64/boot/Image.gz-dtb
