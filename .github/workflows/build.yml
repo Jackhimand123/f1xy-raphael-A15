@@ -6,6 +6,14 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+name: Raphael Kernel Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
@@ -41,6 +49,7 @@ jobs:
           sed -i "1i #include \"$(pwd)/fix_global.h\"" kernel/sched/sched.h
           
           # 3. MANUAL FIX: LED Header Reconstruction
+          # Rebuilds the missing internal leds.h header required by several drivers
           cat <<EOF > drivers/leds/leds.h
           #ifndef __LEDS_H_INCLUDED
           #define __LEDS_H_INCLUDED
@@ -70,16 +79,16 @@ jobs:
 
           # 6. FIX: UFS Pinctrl cast
           if [ -f drivers/scsi/ufs/ufshcd-pltfrm.c ]; then
-            sed -i 's/hba->pctrl = devm_pinctrl_get(hba->dev);/hba->pctrl = (struct pinctrl *)devm_pinctrl_get(hba->dev);/g' drivers/scsi/ufs/ufshcd-pltfrm.c
+            sed -i 's/devm_pinctrl_get(hba->dev);/(struct pinctrl *)devm_pinctrl_get(hba->dev);/g' drivers/scsi/ufs/ufshcd-pltfrm.c
           fi
 
-          # 7. FIX: AKM09970 Pinctrl cast
+          # 7. [span_0](start_span)FIX: AKM09970 Pinctrl cast (Resolves V17 compilation failure)[span_0](end_span)
           if [ -f drivers/misc/akm09970.c ]; then
             sed -i 's/devm_pinctrl_get(dev)/(void *)devm_pinctrl_get(dev)/g' drivers/misc/akm09970.c
-            sed -i 's/pinctrl_lookup_state/(void *)pinctrl_lookup_state/g' drivers/misc/akm09970.c
+            sed -i 's/pinctrl_lookup_state(/(struct pinctrl_state *)pinctrl_lookup_state(/g' drivers/misc/akm09970.c
           fi
 
-          # 8. Performance
+          # 8. Optimization & Final Config
           if [ -f kernel/sched/fair.c ]; then
             sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
           fi
@@ -87,13 +96,14 @@ jobs:
 
       - name: Build Kernel
         run: |
+          # [span_1](start_span)Added -Wno-int-conversion to bypass strict pointer checks in legacy drivers[span_1](end_span)
           make -j$(nproc --all) \
             LLVM=1 \
             LLVM_IAS=0 \
             ARCH=arm64 \
             DTC_EXT=dtc \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-return-type -I$(pwd)/drivers/hid -I$(pwd)" \
+            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-return-type -Wno-int-conversion -I$(pwd)/drivers/hid -I$(pwd)" \
             Image.gz-dtb
 
       - name: Prepare Artifacts
@@ -105,5 +115,5 @@ jobs:
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-A15-V17
+          name: Raphael-Kernel-A15-V18
           path: out/*
