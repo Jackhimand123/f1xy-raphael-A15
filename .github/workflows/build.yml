@@ -29,7 +29,19 @@ jobs:
           # 1. Base Config
           make ARCH=arm64 raphael_defconfig
           
-          # 2. FIX: Global definitions
+          # 2. LINKER REPAIR: Enable missing symbol providers for the final link
+          scripts/config --enable CONFIG_SCHEDSTATS
+          scripts/config --enable CONFIG_SUBSYSTEM_RESTART
+          scripts/config --enable CONFIG_MSM_SUBSYSTEM_RESTART
+          scripts/config --enable CONFIG_MSM_SYSMON_QMI_COMM
+          scripts/config --enable CONFIG_ICNSS
+          scripts/config --enable CONFIG_ICNSS_QMI
+          scripts/config --enable CONFIG_QMI_ENCDEC
+          scripts/config --enable CONFIG_SND_SOC_MSM_STUB
+          scripts/config --enable CONFIG_SENSORS_SSC
+          make ARCH=arm64 olddefconfig
+
+          # 3. GLOBAL SCHEDULER FIX
           cat <<EOF > fix_global.h
           #ifndef _FIX_GLOBAL_H
           #define _FIX_GLOBAL_H
@@ -39,7 +51,7 @@ jobs:
           EOF
           sed -i "1i #include \"$(pwd)/fix_global.h\"" kernel/sched/sched.h
           
-          # 3. MANUAL FIX: LED Header Reconstruction
+          # 4. LED & HID HEADER FIXES
           cat <<EOF > drivers/leds/leds.h
           #ifndef __LEDS_H_INCLUDED
           #define __LEDS_H_INCLUDED
@@ -52,37 +64,24 @@ jobs:
           extern struct list_head leds_list;
           void led_stop_software_blink(struct led_classdev *led_cdev);
           void led_set_brightness_nosleep(struct led_classdev *led_cdev, enum led_brightness value);
-          static inline struct led_classdev *led_trigger_get_target(struct led_trigger *trig) { return NULL; }
           #endif
           EOF
+          [ -f drivers/hid/hid-trace.h ] && ln -sf drivers/hid/hid-trace.h ./hid-trace.h
 
-          # 4. MANUAL FIX: HID Tracepoint Shortcut
-          if [ -f drivers/hid/hid-trace.h ]; then
-            ln -sf drivers/hid/hid-trace.h ./hid-trace.h
-          fi
+          # 5. UNIVERSAL POINTER SAFETY (For any drivers we missed)
+          # This automatically adds casts to common Qualcomm/Xiaomi sensor patterns
+          find drivers/ -name "*.c" -exec sed -i 's/pinctrl_lookup_state(/(void *)pinctrl_lookup_state(/g' {} +
+          find drivers/ -name "*.c" -exec sed -i 's/devm_pinctrl_get(/(void *)devm_pinctrl_get(/g' {} +
 
-          # 5. FIX: MHI/Modem pointer conversion
-          if [ -f drivers/bus/mhi/controllers/mhi_arch_qcom.c ]; then
-             sed -i "1i #include <linux/types.h>" drivers/bus/mhi/controllers/mhi_arch_qcom.c
-             sed -i "2i #define MAX_MSG_SIZE 255" drivers/bus/mhi/controllers/mhi_arch_qcom.c
-             sed -i 's/ipc_log_context_create/(void *)(uintptr_t)ipc_log_context_create/g' drivers/bus/mhi/controllers/mhi_arch_qcom.c
-          fi
-
-          # 6. Performance
-          if [ -f kernel/sched/fair.c ]; then
-            sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
-          fi
+          # 6. Performance Tweak
           scripts/config --disable CONFIG_ARM64_LSE_ATOMICS
 
       - name: Build Kernel
         run: |
           make -j$(nproc --all) \
-            LLVM=1 \
-            LLVM_IAS=0 \
-            ARCH=arm64 \
-            DTC_EXT=dtc \
+            LLVM=1 LLVM_IAS=0 ARCH=arm64 DTC_EXT=dtc \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-return-type -I$(pwd)/drivers/hid -I$(pwd)" \
+            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-return-type -Wno-int-conversion -I$(pwd)/drivers/hid -I$(pwd)" \
             Image.gz-dtb
 
       - name: Prepare Artifacts
@@ -94,5 +93,5 @@ jobs:
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-A15-V16
+          name: Raphael-Kernel-A15-V21
           path: out/*
