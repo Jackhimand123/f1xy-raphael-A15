@@ -27,6 +27,7 @@
 #include <linux/suspend.h>
 #include <linux/mhi.h>
 #include "mhi_qcom.h"
+#define MAX_MSG_SIZE 255
 
 struct arch_info {
 	struct mhi_dev *mhi_dev;
