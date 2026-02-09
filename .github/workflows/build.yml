@@ -29,7 +29,8 @@ jobs:
           # 1. Base Config
           make ARCH=arm64 raphael_defconfig
           
-          # 2. LINKER REPAIR: Fix "Undefined Symbol" for Wi-Fi (ICNSS) and Modem
+          # 2. LINKER REPAIR: Fix Wi-Fi "Undefined Symbols" (icnss_)
+          # These lines force the ICNSS driver to be built-in so the Wi-Fi driver can link to it
           scripts/config --enable CONFIG_ICNSS
           scripts/config --enable CONFIG_ICNSS_QMI
           scripts/config --enable CONFIG_QMI_ENCDEC
@@ -37,6 +38,11 @@ jobs:
           scripts/config --enable CONFIG_MSM_SUBSYSTEM_RESTART
           scripts/config --enable CONFIG_MSM_SYSMON_QMI_COMM
           scripts/config --enable CONFIG_SND_SOC_MSM_STUB
+          
+          # Force the techpack/connectivity to be included
+          scripts/config --enable CONFIG_CNSS_QCA6390
+          scripts/config --enable CONFIG_CNSS_GENL
+          
           make ARCH=arm64 olddefconfig
 
           # 3. GLOBAL SCHEDULER FIX
@@ -66,12 +72,12 @@ jobs:
           EOF
           [ -f drivers/hid/hid-trace.h ] && ln -sf drivers/hid/hid-trace.h ./hid-trace.h
 
-          # 5. UNIVERSAL POINTER SAFETY 
-          # This automatically handles pinctrl casts in any driver files
+          # 5. UNIVERSAL POINTER SAFETY
+          # Automatically adds casts to sensors/drivers to prevent "int to pointer" errors
           find . -name "*.c" -exec sed -i 's/pinctrl_lookup_state(/(void *)pinctrl_lookup_state(/g' {} +
           find . -name "*.c" -exec sed -i 's/devm_pinctrl_get(/(void *)devm_pinctrl_get(/g' {} +
 
-          # 6. Performance & LSE Fix
+          # 6. Disable LSE to avoid linker issues with modern LLVM
           scripts/config --disable CONFIG_ARM64_LSE_ATOMICS
 
       - name: Build Kernel
@@ -86,11 +92,15 @@ jobs:
       - name: Prepare Artifacts
         run: |
           mkdir -p out
-          [ -f arch/arm64/boot/Image.gz-dtb ] && cp arch/arm64/boot/Image.gz-dtb out/
+          if [ -f arch/arm64/boot/Image.gz-dtb ]; then
+            cp arch/arm64/boot/Image.gz-dtb out/
+          elif [ -f arch/arm64/boot/Image.gz ]; then
+            cp arch/arm64/boot/Image.gz out/
+          fi
           find arch/arm64/boot/dts/qcom/ -name "*.dtb" -exec cp {} out/ \;
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-A15-V22
+          name: Raphael-Kernel-A15-V23
           path: out/*
