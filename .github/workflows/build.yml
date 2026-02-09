@@ -29,7 +29,7 @@ jobs:
           # 1. Base Config
           make ARCH=arm64 raphael_defconfig
           
-          # 2. FIX: Global definitions (Scheduler & MHI)
+          # 2. FIX: Global definitions
           cat <<EOF > fix_global.h
           #ifndef _FIX_GLOBAL_H
           #define _FIX_GLOBAL_H
@@ -40,8 +40,7 @@ jobs:
           EOF
           sed -i "1i #include \"$(pwd)/fix_global.h\"" kernel/sched/sched.h
           
-          # 3. MANUAL FIX: LED Header Reconstruction (v16 - The Full Blueprint)
-          # This provides the lock, the list, and the function prototypes
+          # 3. MANUAL FIX: LED Header Reconstruction
           cat <<EOF > drivers/leds/leds.h
           #ifndef __LEDS_H_INCLUDED
           #define __LEDS_H_INCLUDED
@@ -50,19 +49,11 @@ jobs:
           #include <linux/list.h>
           #include <linux/leds.h>
           #include <linux/rwsem.h>
-
-          /* Global LED variables to fix undeclared identifier errors */
           extern struct rw_semaphore leds_list_lock;
           extern struct list_head leds_list;
-
-          /* Prototypes to fix implicit declaration errors */
           void led_stop_software_blink(struct led_classdev *led_cdev);
           void led_set_brightness_nosleep(struct led_classdev *led_cdev, enum led_brightness value);
-
-          static inline struct led_classdev *led_trigger_get_target(struct led_trigger *trig)
-          {
-              return NULL;
-          }
+          static inline struct led_classdev *led_trigger_get_target(struct led_trigger *trig) { return NULL; }
           #endif
           EOF
 
@@ -82,7 +73,13 @@ jobs:
             sed -i 's/hba->pctrl = devm_pinctrl_get(hba->dev);/hba->pctrl = (struct pinctrl *)devm_pinctrl_get(hba->dev);/g' drivers/scsi/ufs/ufshcd-pltfrm.c
           fi
 
-          # 7. Compatibility & Performance
+          # 7. FIX: AKM09970 Pinctrl cast
+          if [ -f drivers/misc/akm09970.c ]; then
+            sed -i 's/devm_pinctrl_get(dev)/(void *)devm_pinctrl_get(dev)/g' drivers/misc/akm09970.c
+            sed -i 's/pinctrl_lookup_state/(void *)pinctrl_lookup_state/g' drivers/misc/akm09970.c
+          fi
+
+          # 8. Performance
           if [ -f kernel/sched/fair.c ]; then
             sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
           fi
@@ -108,5 +105,5 @@ jobs:
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-A15-V16-Manual
+          name: Raphael-Kernel-A15-V17
           path: out/*
