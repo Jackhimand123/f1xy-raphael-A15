@@ -29,7 +29,18 @@ jobs:
           # 1. Base Config
           make ARCH=arm64 raphael_defconfig
           
-          # 2. FIX: Global definitions
+          # 2. LINKER FIX: Force enable missing dependencies
+          scripts/config --enable CONFIG_DRM_MSM
+          scripts/config --enable CONFIG_QCOM_SHAREDMEM_ENUMERATOR
+          scripts/config --enable CONFIG_PINCTRL_MSM
+          scripts/config --enable CONFIG_UFS_QCOM_ICE
+          scripts/config --enable CONFIG_CRYPTO_DEV_QCOM_ICE
+          scripts/config --enable CONFIG_REGULATOR_QPNP_POWERNON
+          scripts/config --enable CONFIG_ICNSS
+          scripts/config --enable CONFIG_ICNSS_QMI
+          make ARCH=arm64 olddefconfig
+
+          # 3. GLOBAL FIX: definitions
           cat <<EOF > fix_global.h
           #ifndef _FIX_GLOBAL_H
           #define _FIX_GLOBAL_H
@@ -40,7 +51,7 @@ jobs:
           EOF
           sed -i "1i #include \"$(pwd)/fix_global.h\"" kernel/sched/sched.h
           
-          # 3. MANUAL FIX: LED Header Reconstruction
+          # 4. MANUAL FIX: LED Header
           cat <<EOF > drivers/leds/leds.h
           #ifndef __LEDS_H_INCLUDED
           #define __LEDS_H_INCLUDED
@@ -57,37 +68,22 @@ jobs:
           #endif
           EOF
 
-          # 4. MANUAL FIX: HID Tracepoint Shortcut
-          if [ -f drivers/hid/hid-trace.h ]; then
-            ln -sf drivers/hid/hid-trace.h ./hid-trace.h
-          fi
-
-          # 5. FIX: MHI/Modem pointer conversion
+          # 5. HID & MHI Fixes
+          [ -f drivers/hid/hid-trace.h ] && ln -sf drivers/hid/hid-trace.h ./hid-trace.h
           if [ -f drivers/bus/mhi/controllers/mhi_arch_qcom.c ]; then
              sed -i "1i #include \"$(pwd)/fix_global.h\"" drivers/bus/mhi/controllers/mhi_arch_qcom.c
              sed -i 's/ipc_log_context_create/(void *)ipc_log_context_create/g' drivers/bus/mhi/controllers/mhi_arch_qcom.c
           fi
 
-          # 6. FIX: UFS Pinctrl cast
-          if [ -f drivers/scsi/ufs/ufshcd-pltfrm.c ]; then
-            sed -i 's/devm_pinctrl_get(hba->dev);/(struct pinctrl *)devm_pinctrl_get(hba->dev);/g' drivers/scsi/ufs/ufshcd-pltfrm.c
-          fi
+          # 6. GLOBAL PINCTRL FIX (Cast everything to prevent linker mismatches)
+          find drivers/ -name "*.c" -exec sed -i 's/pinctrl_lookup_state(/(void *)pinctrl_lookup_state(/g' {} +
+          find drivers/ -name "*.c" -exec sed -i 's/devm_pinctrl_get(/(void *)devm_pinctrl_get(/g' {} +
 
-          # 7. FIX: AKM09970 Pinctrl cast (The new error)
-          if [ -f drivers/misc/akm09970.c ]; then
-            sed -i 's/devm_pinctrl_get(dev)/(void *)devm_pinctrl_get(dev)/g' drivers/misc/akm09970.c
-            sed -i 's/pinctrl_lookup_state/(void *)pinctrl_lookup_state/g' drivers/misc/akm09970.c
-          fi
-
-          # 8. Performance & Compatibility
-          if [ -f kernel/sched/fair.c ]; then
-            sed -i 's/sysctl_sched_latency = 6000000ULL/sysctl_sched_latency = 4000000ULL/g' kernel/sched/fair.c
-          fi
+          # 7. Optimization
           scripts/config --disable CONFIG_ARM64_LSE_ATOMICS
 
       - name: Build Kernel
         run: |
-          # Added -Wno-int-conversion to bypass strict pointer checks in legacy drivers
           make -j$(nproc --all) \
             LLVM=1 \
             LLVM_IAS=0 \
@@ -106,5 +102,5 @@ jobs:
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-A15-V18
+          name: Raphael-Kernel-A15-V19-LINKED
           path: out/*
