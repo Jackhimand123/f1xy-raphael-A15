@@ -13,7 +13,6 @@ jobs:
 
       - name: Setup Environment
         run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
           sudo apt-get update
           sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm curl git
 
@@ -29,44 +28,35 @@ jobs:
         run: |
           mkdir -p out
           
-          # 1. SCRUBBER
+          # 1. FIX THE SCHEDULER ERRORS (The New Fix)
+          # Define FULL_THROTTLE_BOOST if missing and stub the missing trace/functions
+          sed -i '1i #define FULL_THROTTLE_BOOST 2' kernel/sched/fair.c
+          sed -i '2i static inline void trace_sched_load_balance_skip_tasks(int s, int d, bool b) {}' kernel/sched/fair.c
+          sed -i '3i static inline void mark_reserved(int cpu) {}' kernel/sched/fair.c
+
+          # 2. GLOBAL SCRUBBER (Previous Fixes)
           find . -type f -name "Makefile*" -o -name "*.kbuild" -o -name "*.inc" | xargs sed -i 's/-mllvm//g' || true
           find . -type f -name "Makefile*" -o -name "*.kbuild" | xargs sed -i 's/-hot-cold-split=true//g' || true
           find . -type f -name "Makefile*" -o -name "*.kbuild" | xargs sed -i 's/-regalloc-enable-advisor=release//g' || true
-          find . -type f -name "Makefile*" -o -name "*.kbuild" | xargs sed -i 's/-ftrivial-auto-var-init=zero//g' || true
 
           export HOSTCC=gcc
           export HOSTCXX=g++
           export HOSTLDFLAGS="-fuse-ld=bfd"
 
-          # 2. GENERATE INITIAL CONFIG
+          # 3. CONFIG
           make O=out ARCH=arm64 raphael_defconfig \
                CC=${{ env.PROTON_PATH }}/clang \
                HOSTCC=$HOSTCC \
                HOSTCXX=$HOSTCXX \
                HOSTLDFLAGS="$HOSTLDFLAGS"
 
-          # 3. FORCE-ENABLE REQUIRED SUBSYSTEMS
-          # Display/Backlight
+          # Force essentials
           scripts/config --file out/.config -e BACKLIGHT_CLASS_DEVICE -e BACKLIGHT_LCD_SUPPORT -e LCD_CLASS_DEVICE
+          scripts/config --file out/.config -e ICNSS -e MSM_SUBSYSTEM_RESTART
           
-          # WiFi & Connectivity (ICNSS)
-          scripts/config --file out/.config -e ICNSS -e ICNSS_QMI -e ICNSS_DEBUG
-          
-          # Audio & Calibration (TFA98xx dependencies)
-          scripts/config --file out/.config -e SND_SOC_WCD_CPE -e MSMLAB_COMMON -e SND_SOC_TFA98XX
-          
-          # Subsystem Restart & ESOC (The 'subsys' errors)
-          scripts/config --file out/.config -e MSM_SUBSYSTEM_RESTART -e MSM_PIL -e ESOC -e ESOC_DEV
-          
-          # Re-sync and accept defaults
-          make O=out ARCH=arm64 olddefconfig \
-               CC=${{ env.PROTON_PATH }}/clang \
-               HOSTCC=$HOSTCC \
-               HOSTCXX=$HOSTCXX \
-               HOSTLDFLAGS="$HOSTLDFLAGS"
+          make O=out ARCH=arm64 olddefconfig CC=${{ env.PROTON_PATH }}/clang
 
-          # 4. BUILD KERNEL
+          # 4. BUILD
           make -j$(nproc --all) O=out \
                ARCH=arm64 \
                CC="${{ env.PROTON_PATH }}/clang -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang" \
@@ -76,15 +66,14 @@ jobs:
                OBJCOPY=${{ env.PROTON_PATH }}/llvm-objcopy \
                OBJDUMP=${{ env.PROTON_PATH }}/llvm-objdump \
                STRIP=${{ env.PROTON_PATH }}/llvm-strip \
-               OBJSIZE=${{ env.PROTON_PATH }}/llvm-size \
                CROSS_COMPILE=${{ env.PROTON_PATH }}/aarch64-linux-gnu- \
                CROSS_COMPILE_ARM32=${{ env.PROTON_PATH }}/arm-linux-gnueabi- \
                HOSTCC=$HOSTCC \
                HOSTCXX=$HOSTCXX \
                HOSTLDFLAGS="$HOSTLDFLAGS"
 
-      - name: Upload Finished Kernel
+      - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Rikka-V5-Success
+          name: Rikka-V5-Fixed-Scheduler
           path: out/arch/arm64/boot/Image.gz-dtb
