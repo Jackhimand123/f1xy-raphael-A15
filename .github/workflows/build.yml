@@ -1,5 +1,4 @@
-name: Raphael Kernel Build
-
+name: Rikka V5 Final Build
 on:
   workflow_dispatch:
 
@@ -7,97 +6,85 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout Source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Install Toolchain and Dependencies
+      - name: Setup Environment
         run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
           sudo apt-get update
-          sudo apt-get install -y \
-            bc build-essential flex bison lld llvm clang libssl-dev libelf-dev \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu device-tree-compiler \
-            python3 git zip
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm curl git
 
-      - name: Set Up Build Environment
+      - name: Setup Toolchain
         run: |
-          echo "ARCH=arm64" >> $GITHUB_ENV
-          echo "SUBARCH=arm64" >> $GITHUB_ENV
-          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          mkdir -p toolchain
+          cd toolchain
+          wget https://github.com/kdrag0n/proton-clang/archive/refs/heads/master.tar.gz
+          tar -xf master.tar.gz
+          echo "PROTON_PATH=$(pwd)/proton-clang-master/bin" >> $GITHUB_ENV
 
-      - name: Configure and Patch
-        run: |
-          # 1. Base Config
-          make ARCH=arm64 raphael_defconfig
-          
-          # 2. FORCE ICNSS SYMBOLS (Manual Defconfig Injection)
-          # We force these to 'y' (built-in) so they are available at the final link
-          sed -i '/CONFIG_ICNSS/d' .config
-          echo "CONFIG_ICNSS=y" >> .config
-          echo "CONFIG_ICNSS_QMI=y" >> .config
-          echo "CONFIG_CNSS_GENL=y" >> .config
-          
-          # 3. Wi-Fi LINKER STUB (The "Nuclear" Manual Fix)
-          # If the driver code is missing, we provide the symbols ourselves to stop the error
-          cat <<EOF > wifi_link_fix.c
-          #include <linux/kernel.h>
-          void icnss_ce_free_irq(void *dev, unsigned int ce_id, void *ctx) { }
-          int icnss_ce_request_irq(void *dev, unsigned int ce_id, void *handler, unsigned long flags, const char *name, void *ctx) { return 0; }
-          void icnss_enable_irq(void *dev, unsigned int ce_id) { }
-          void icnss_disable_irq(void *dev, unsigned int ce_id) { }
-          int icnss_get_ce_id(void *dev, int irq) { return 0; }
-          EOF
-          # Add this fix to the build list
-          echo "obj-y += wifi_link_fix.o" >> drivers/staging/qcacld-3.0/core/pld/src/Makefile
-
-          # 4. GLOBAL SCHEDULER & LED FIXES
-          cat <<EOF > fix_global.h
-          #ifndef _FIX_GLOBAL_H
-          #define _FIX_GLOBAL_H
-          #define SCHED_FULL_THROTTLE 1
-          #define FULL_THROTTLE_BOOST 1
-          #endif
-          EOF
-          sed -i "1i #include \"$(pwd)/fix_global.h\"" kernel/sched/sched.h
-          
-          cat <<EOF > drivers/leds/leds.h
-          #ifndef __LEDS_H_INCLUDED
-          #define __LEDS_H_INCLUDED
-          #include <linux/device.h>
-          #include <linux/rwlock.h>
-          #include <linux/list.h>
-          #include <linux/leds.h>
-          #include <linux/rwsem.h>
-          extern struct rw_semaphore leds_list_lock;
-          extern struct list_head leds_list;
-          void led_stop_software_blink(struct led_classdev *led_cdev);
-          void led_set_brightness_nosleep(struct led_classdev *led_cdev, enum led_brightness value);
-          #endif
-          EOF
-          [ -f drivers/hid/hid-trace.h ] && ln -sf drivers/hid/hid-trace.h ./hid-trace.h
-
-          # 5. UNIVERSAL POINTER SAFETY
-          find . -name "*.c" -exec sed -i 's/pinctrl_lookup_state(/(void *)pinctrl_lookup_state(/g' {} +
-          find . -name "*.c" -exec sed -i 's/devm_pinctrl_get(/(void *)devm_pinctrl_get(/g' {} +
-
-          make ARCH=arm64 olddefconfig
-
-      - name: Build Kernel
-        run: |
-          make -j$(nproc --all) \
-            LLVM=1 LLVM_IAS=0 ARCH=arm64 DTC_EXT=dtc \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            KCFLAGS="-Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-return-type -Wno-int-conversion -I$(pwd)/drivers/hid -I$(pwd)" \
-            LDFLAGS="--allow-shlib-undefined" \
-            Image.gz-dtb
-
-      - name: Prepare Artifacts
+      - name: Compile Kernel
         run: |
           mkdir -p out
-          [ -f arch/arm64/boot/Image.gz-dtb ] && cp arch/arm64/boot/Image.gz-dtb out/
-          find arch/arm64/boot/dts/qcom/ -name "*.dtb" -exec cp {} out/ \;
+          
+          # 1. SCRUBBER
+          find . -type f -name "Makefile*" -o -name "*.kbuild" -o -name "*.inc" | xargs sed -i 's/-mllvm//g' || true
+          find . -type f -name "Makefile*" -o -name "*.kbuild" | xargs sed -i 's/-hot-cold-split=true//g' || true
+          find . -type f -name "Makefile*" -o -name "*.kbuild" | xargs sed -i 's/-regalloc-enable-advisor=release//g' || true
+          find . -type f -name "Makefile*" -o -name "*.kbuild" | xargs sed -i 's/-ftrivial-auto-var-init=zero//g' || true
 
-      - name: Upload Kernel
+          export HOSTCC=gcc
+          export HOSTCXX=g++
+          export HOSTLDFLAGS="-fuse-ld=bfd"
+
+          # 2. GENERATE INITIAL CONFIG
+          make O=out ARCH=arm64 raphael_defconfig \
+               CC=${{ env.PROTON_PATH }}/clang \
+               HOSTCC=$HOSTCC \
+               HOSTCXX=$HOSTCXX \
+               HOSTLDFLAGS="$HOSTLDFLAGS"
+
+          # 3. FORCE-ENABLE REQUIRED SUBSYSTEMS
+          # Display/Backlight
+          scripts/config --file out/.config -e BACKLIGHT_CLASS_DEVICE -e BACKLIGHT_LCD_SUPPORT -e LCD_CLASS_DEVICE
+          
+          # WiFi & Connectivity (ICNSS)
+          scripts/config --file out/.config -e ICNSS -e ICNSS_QMI -e ICNSS_DEBUG
+          
+          # Audio & Calibration (TFA98xx dependencies)
+          scripts/config --file out/.config -e SND_SOC_WCD_CPE -e MSMLAB_COMMON -e SND_SOC_TFA98XX
+          
+          # Subsystem Restart & ESOC (The 'subsys' errors)
+          scripts/config --file out/.config -e MSM_SUBSYSTEM_RESTART -e MSM_PIL -e ESOC -e ESOC_DEV
+          
+          # Re-sync and accept defaults
+          make O=out ARCH=arm64 olddefconfig \
+               CC=${{ env.PROTON_PATH }}/clang \
+               HOSTCC=$HOSTCC \
+               HOSTCXX=$HOSTCXX \
+               HOSTLDFLAGS="$HOSTLDFLAGS"
+
+          # 4. BUILD KERNEL
+          make -j$(nproc --all) O=out \
+               ARCH=arm64 \
+               CC="${{ env.PROTON_PATH }}/clang -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang" \
+               LD=${{ env.PROTON_PATH }}/ld.lld \
+               AR=${{ env.PROTON_PATH }}/llvm-ar \
+               NM=${{ env.PROTON_PATH }}/llvm-nm \
+               OBJCOPY=${{ env.PROTON_PATH }}/llvm-objcopy \
+               OBJDUMP=${{ env.PROTON_PATH }}/llvm-objdump \
+               STRIP=${{ env.PROTON_PATH }}/llvm-strip \
+               OBJSIZE=${{ env.PROTON_PATH }}/llvm-size \
+               CROSS_COMPILE=${{ env.PROTON_PATH }}/aarch64-linux-gnu- \
+               CROSS_COMPILE_ARM32=${{ env.PROTON_PATH }}/arm-linux-gnueabi- \
+               HOSTCC=$HOSTCC \
+               HOSTCXX=$HOSTCXX \
+               HOSTLDFLAGS="$HOSTLDFLAGS"
+
+      - name: Upload Finished Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Raphael-Kernel-A15-V24
-          path: out/*
+          name: Rikka-V5-Success
+          path: out/arch/arm64/boot/Image.gz-dtb
